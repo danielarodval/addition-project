@@ -14,6 +14,7 @@
 import streamlit as st
 from streamlit.logger import get_logger
 import pandas as pd
+from datetime import datetime
 
 LOGGER = get_logger(__name__)
 
@@ -31,7 +32,7 @@ def run():
     branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
     member_df = pd.read_csv('data/Member_Level_Dataset.csv')
     
-    #grouped_branches = member_df.groupby(by=["BranchCategory"]).sum()
+    grouped_branches = member_df.groupby(by=["BranchCategory"]).sum(numeric_only=True)
     st.markdown(
         """
         ## Data Import
@@ -43,5 +44,7 @@ def run():
     with tab_member:
         st.dataframe(member_df.head())
 
+    st.dataframe(grouped_branches.head())
+print(datetime.now())
 if __name__ == "__main__":
     run()
