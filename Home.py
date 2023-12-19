@@ -31,7 +31,7 @@ def run():
     branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
     member_df = pd.read_csv('data/Member_Level_Dataset.csv')
     
-    grouped_branches = member_df.groupby(by=["BranchCategory"]).sum()
+    #grouped_branches = member_df.groupby(by=["BranchCategory"]).sum()
     st.markdown(
         """
         ## Data Import
