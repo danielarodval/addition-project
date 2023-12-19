@@ -8,4 +8,4 @@ scipy
 plotly
 seaborn
 matplotlib
-sklearn
+scikit-learn
