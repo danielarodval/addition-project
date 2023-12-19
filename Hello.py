@@ -27,15 +27,21 @@ def run():
     st.write("# Addition Financial Project")
 
     st.sidebar.success("Select a demo above.")
-
+    # Data Import Section
+    branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
+    member_df = pd.read_csv('data/Member_Level_Dataset.csv')
+    
+    #grouped_branches = member_df.groupby(by=["BranchCategory"]).sum()
     st.markdown(
         """
         ## Data Import
     """
     )
-    branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
-    member_df = pd.read_csv('data/Member_Level_Dataset.csv')
-    st.dataframe(branch_df.head())
+    tab_branch, tab_member = st.tabs(['Branch Data','Member Data'])
+    with tab_branch:
+        st.dataframe(branch_df.head())
+    with tab_member:
+        st.dataframe(member_df.head())
 
 if __name__ == "__main__":
     run()
