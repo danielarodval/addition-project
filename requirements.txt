@@ -4,3 +4,8 @@ pandas
 pydeck
 streamlit
 openpyxl
+scipy
+plotly
+seaborn
+matplotlib
+sklearn
