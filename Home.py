@@ -31,7 +31,6 @@ def run():
     branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
     member_df = pd.read_csv('data/Member_Level_Dataset.csv')
     
-    #grouped_branches = member_df.groupby(by=["BranchCategory"]).sum()
     st.markdown(
         """
         ## Data Import
@@ -42,6 +41,8 @@ def run():
         st.dataframe(branch_df.head())
     with tab_member:
         st.dataframe(member_df.head())
+
+    #grouped_branches = member_df.groupby(by=["BranchCategory"]).sum()
 
 if __name__ == "__main__":
     run()
