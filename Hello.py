@@ -13,6 +13,7 @@
 # limitations under the License.
 import streamlit as st
 from streamlit.logger import get_logger
+import pandas as pd
 
 LOGGER = get_logger(__name__)
 
@@ -32,7 +33,9 @@ def run():
         ## Data Import
     """
     )
-
+    branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
+    member_df = pd.read_csv('data/Member_Level_Dataset.csv')
+    st.dataframe(branch_df.head())
 
 if __name__ == "__main__":
     run()
