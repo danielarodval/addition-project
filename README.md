@@ -11,9 +11,9 @@
 
 ## Streamlit Introduction
 ### Good Resources
+- [Steamlit API Reference (best)](https://docs.streamlit.io/library/api-reference)
 - [Streamlit Cheatsheet](https://docs.streamlit.io/library/cheatsheet)
 - [Reference Guide: How to Build a Real Time Live Dashboard](https://blog.streamlit.io/how-to-build-a-real-time-live-dashboard-with-streamlit/)
-- 
 
 ### Default Intro
 
