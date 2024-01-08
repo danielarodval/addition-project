@@ -158,17 +158,22 @@ def run():
         
     st.markdown("### Exploratory Analysis")
 
-    st.markdown("Grouped Data")
+    st.markdown("#### Grouped Data")
+    st.dataframe(grouped_br_df.describe())
     fig = create_corr_matrix_heatmap(grouped_br_df)
     st.plotly_chart(fig)
 
-    st.markdown("Grouped (Branch & Month) Data")
+    st.markdown("#### Grouped (Branch & Month) Data")
+    st.dataframe(grouped_br_eom_df.describe())
     fig = create_corr_matrix_heatmap(grouped_br_eom_df)
     st.plotly_chart(fig)
 
-    st.markdown("Member Data")
+    st.markdown("#### Member Data")
+    st.dataframe(member_df.describe())
     fig = create_corr_matrix_heatmap(member_df)
     st.plotly_chart(fig)
+
+
 
     with st.expander("Notes"):
         st.text("""
