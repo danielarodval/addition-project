@@ -18,60 +18,31 @@ from datetime import datetime
 import numpy as np
 from uszipcode import SearchEngine
 import plotly.express as px
+from dataclasses import dataclass
+from sklearn.preprocessing import MinMaxScaler
 
 LOGGER = get_logger(__name__)
 
-def create_corr_matrix_heatmap(df):
-    corr_matrix = df.corr()
-    fig = px.imshow(corr_matrix,
-                    labels=dict(x="Feature", y="Feature", color="Correlation"),
-                    x=corr_matrix.columns,
-                    y=corr_matrix.columns)
-    
-    fig.update_layout(title="Correlation Matrix",
-                      xaxis_nticks=len(corr_matrix.columns),
-                      yaxis_nticks=len(corr_matrix.columns),
-                      xaxis_title="Feature",
-                      yaxis_title="Feature")
-    return fig
+@dataclass
 
-def run():
-    st.set_page_config(
-        page_title="Insights",
-        page_icon="💹",
-    )
+class Params:
+    '''All paramaters used throughout the code'''
 
-    st.write("# Addition Financial Project")
+    sigma = 0.2 # determines how significant the weight a variables is
+    scale_range = (0, 20)
+    mismatch_weight = 10
+    virtual_weight = 10
+    test_size = 0.2
 
-    st.sidebar.success("Select a demo above.")
-    # Data Import Section
+params = Params()
+
+def import_base_data():
     branch_df = pd.read_excel('data/Branch_Level_Dataset.xlsx')
     member_df = pd.read_csv('data/Member_Level_Dataset.csv')
-    
-    grouped_branches = member_df.groupby(by=["BranchCategory"]).sum(numeric_only=True)
+    return branch_df, member_df
 
-    st.markdown(
-        """
-        ## Data
-        ### Import
-    """
-    )
-    with st.expander("See Data Import"):
-        tab_branch, tab_member = st.tabs(['Branch Data','Member Data'])
-        with tab_branch:
-            st.dataframe(branch_df.head())
-        with tab_member:
-            st.dataframe(member_df.head())
-        st.dataframe(grouped_branches.head())
-
-    st.markdown(
-        """
-        ### Pre-Processing
-    """
-    )
-
-    with st.expander("See Data Processing"):
-        county_map = {
+def process_data(branch_df, member_df):
+    county_map = {
         'Addition Financial Arena': 'Orange',
         'Apopka': 'Orange',
         'Boone High School': 'Orange',
@@ -112,68 +83,199 @@ def run():
         'Poinciana': 'Polk',
         'Virtual Branch': None  # Virtual Branch does not have a county
         }
+    
+    branch_df['County'] = branch_df['BranchCategory'].map(county_map)
+    member_df['Branch_County'] = member_df['BranchCategory'].map(county_map)
 
-        branch_df['County'] = branch_df['BranchCategory'].map(county_map)
-        member_df['Branch_County'] = member_df['BranchCategory'].map(county_map)
+    unique_zips = member_df['address_zip'].unique()
 
-        unique_zips = member_df['address_zip'].unique()
+    search = SearchEngine()
 
-        search = SearchEngine()
+    zip_to_county_map = {
+        zip_code: (search.by_zipcode(zip_code).county if search.by_zipcode(zip_code) else np.nan)
+        for zip_code in unique_zips
+}
 
-        zip_to_county_map = {
-            zip_code: (search.by_zipcode(zip_code).county if search.by_zipcode(zip_code) else np.nan)
-            for zip_code in unique_zips
-        }
+    member_df['address_county'] = member_df['address_zip'].map(zip_to_county_map)
+    member_df['address_county'] = member_df['address_county'].str.replace(' County', '', regex=False)
 
-        member_df['address_county'] = member_df['address_zip'].map(zip_to_county_map)
-        member_df['address_county'] = member_df['address_county'].str.replace(' County', '', regex=False)
+    missing_county_members = member_df[pd.isna(member_df['address_county'])]
+    missing_zips = missing_county_members['address_zip'].unique()
 
-        missing_county_members = member_df[pd.isna(member_df['address_county'])]
-        missing_zips = missing_county_members['address_zip'].unique()
+    unique_county = member_df['address_county'].unique()
+    transaction_columns = ['ATMCount', 'BillPaymentCount', 'CashCount', 'DraftCount', 'ACHCount', 'FeeCount', 'Credit_DebitCount', 'Home_Banking', 'WireCount', 'DividendCount']
+    avg_columns = ['n_accts', 'n_checking_accts', 'n_savings_accts', 'n_open_loans', 'n_open_cds', 'n_open_club_accts', 'n_open_credit_cards']
 
-        unique_county = member_df['address_county'].unique()
-        transaction_columns = ['ATMCount', 'BillPaymentCount', 'CashCount', 'DraftCount', 'ACHCount', 'FeeCount', 'Credit_DebitCount', 'Home_Banking', 'WireCount', 'DividendCount']
-        avg_columns = ['n_accts', 'n_checking_accts', 'n_savings_accts', 'n_open_loans', 'n_open_cds', 'n_open_club_accts', 'n_open_credit_cards']
+    # Define the aggregation dictionary
+    agg_dict = {col: 'sum' for col in transaction_columns}
+    agg_dict.update({col: 'mean' for col in avg_columns})
 
-        # Define the aggregation dictionary
-        agg_dict = {col: 'sum' for col in transaction_columns}
-        agg_dict.update({col: 'mean' for col in avg_columns})
+    grouped_members_eom = member_df.groupby(['BranchCategory', 'EOM_TRANS_DATE']).agg(agg_dict).reset_index()
+    group_members = member_df.groupby(['BranchCategory']).agg(agg_dict).reset_index()
 
-        grouped_br_eom_df = member_df.groupby(['BranchCategory', 'EOM_TRANS_DATE']).agg(agg_dict).reset_index()
-        grouped_br_df = member_df.groupby(['BranchCategory']).agg(agg_dict).reset_index()
+    return group_members, grouped_members_eom, branch_df
 
-        st.markdown(f"""Grouped Data Processed
-                    Grouped Size = {grouped_br_df.shape}
+def group_branch_data(df):
+    grouped_df = df.groupby('BranchCategory').agg({
+    'County': 'last',
+    'ATM': 'sum',
+    'Bill Payment': 'sum',
+    'Cash': 'sum',
+    'Draft': 'sum',
+    'ACH': 'sum',
+    'Fee': 'sum',
+    'Credit/Debit Card': 'sum',
+    'Home Banking': 'sum',
+    'Dividend': 'sum',
+    'EOM_TRANS_DATE': 'count',
+    }).rename(columns={'EOM_TRANS_DATE': 'Total_Transactions'}).reset_index()
+    return grouped_df
+
+def scale_branch_data(df):
+    scaler = MinMaxScaler(feature_range=params.scale_range)
+    columns_to_normalize = ['ATM', 'Bill Payment', 'Cash', 'Draft', 'ACH', 'Fee', 'Credit/Debit Card', 'Home Banking', 'Dividend']
+
+    scaled_grouped_branch = df.copy()
+    scaled_grouped_branch[columns_to_normalize] = scaler.fit_transform(df[columns_to_normalize])
+
+    return scaled_grouped_branch
+
+def create_corr_matrix_heatmap(df):
+    corr_matrix = df.corr()
+    fig = px.imshow(corr_matrix,
+                    labels=dict(x="Feature", y="Feature", color="Correlation"),
+                    x=corr_matrix.columns,
+                    y=corr_matrix.columns)
+    
+    fig.update_layout(title="Correlation Matrix",
+                      xaxis_nticks=len(corr_matrix.columns),
+                      yaxis_nticks=len(corr_matrix.columns),
+                      xaxis_title="Feature",
+                      yaxis_title="Feature")
+    return fig
+
+def run():
+    st.set_page_config(
+        page_title="Insights",
+        page_icon="💹",
+    )
+    st.write("# Addition Financial Project")
+    st.sidebar.success("Select a demo above.")
+
+    # Data Import Section
+    branch_df, member_df = import_base_data()
+    
+    # Data Prociessing & Branch Grouping
+    group_members, group_members_eom, branch_df = process_data(branch_df, member_df)
+    grouped_branches = group_branch_data(branch_df)
+
+    st.markdown("""
+                ### Data Import
+    """)
+    
+    with st.expander("See Data Import"):
+        tab_member, tab_branch, tab_grouped = st.tabs(['Member Data','Branch Data', 'Grouped Branch Data'])
+
+        with tab_member:
+            st.markdown(f"""
+                        #### Member Data
+
+                        {member_df.shape}
                     """)
-        st.dataframe(grouped_br_df)
-        st.markdown(f"""Grouped Data (Branch & Month) Processed
-                    Grouped Size = {grouped_br_eom_df.shape}
-                    """)
-        st.dataframe(grouped_br_eom_df)
+            st.dataframe(member_df.head())
+            st.dataframe(member_df.describe())
 
-        st.markdown(f"""Member Data Processed
+        with tab_branch:
+            st.markdown(f"""
+                        #### Branch Data
+
+                        {branch_df.shape}
+                    """)
+            st.dataframe(branch_df)
+            st.dataframe(branch_df.describe())
+
+        with tab_grouped:
+            st.markdown(f"""
+                        #### Grouped Branch Data
+
+                        {grouped_branches.shape}
+                        """)
+            st.dataframe(grouped_branches)
+            st.dataframe(grouped_branches.describe())
+
+    st.markdown(f"""
+                #### Post Import Size
+
+                Member Data = {member_df.shape}
+
+                Branch Data = {branch_df.shape}
+
+                Grouped Branch Data = {grouped_branches.shape}
+    """)
+    
+    # Data Pre-Processing Section
+    st.markdown("### Pre-Processing")
+
+    with st.expander("See Data Processing"):
+        # Before Processing
+        st.markdown(f"""
+                    #### Member Data Processed
+                    
                     Member Size = {member_df.shape}
-                    """)
+        """)
         st.dataframe(member_df.head())
+
+        # After Processing w/ Dates
+        st.markdown(f"""
+                    #### Grouped Member Data (Branch & Date)
+                    
+                    Grouped Size = {group_members_eom.shape}
+        """)
+        st.dataframe(group_members_eom)
+
+        # After Processing w/o Dates
+        st.markdown(f"""
+                    #### Grouped Member Data
+                    
+                    Grouped Size = {group_members.shape}
+        """)
+        st.dataframe(group_members)
+
+    st.markdown(f"""
+                #### Post Processing Size
+
+                ##### Member Data
+
+                Member Data = {member_df.shape}
+
+                Grouped Member Data (Branch & Date) = {group_members_eom.shape}
+
+                Grouped Member Data = {group_members.shape}
+
+                ##### Branch Data
+
+                Branch Data = {branch_df.shape}
+
+                Grouped Branch Data = {grouped_branches.shape}
+
+    """)
         
     st.markdown("### Exploratory Analysis")
 
     st.markdown("#### Grouped Data")
-    #st.dataframe(grouped_br_df.describe())
-    #fig = create_corr_matrix_heatmap(grouped_br_df)
-    #st.plotly_chart(fig)
+    st.dataframe(group_members.describe())
+    fig = create_corr_matrix_heatmap(group_members)
+    st.plotly_chart(fig)
 
     st.markdown("#### Grouped (Branch & Month) Data")
-    st.dataframe(grouped_br_eom_df.describe())
-    fig = create_corr_matrix_heatmap(grouped_br_eom_df)
+    st.dataframe(group_members_eom.describe())
+    fig = create_corr_matrix_heatmap(group_members_eom)
     st.plotly_chart(fig)
 
     st.markdown("#### Member Data")
     st.dataframe(member_df.describe())
     fig = create_corr_matrix_heatmap(member_df)
     st.plotly_chart(fig)
-
-
 
     with st.expander("Notes"):
         st.text("""

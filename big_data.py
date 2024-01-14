@@ -131,16 +131,16 @@ scaled_grouped_branch.describe()
 """## Calculating Score for Each Branch"""
 
 branch_weights = {
-    'ATM': 1,
-    'Bill Payment': 1 + 1*params.sigma,
-    'Cash': 1,
-    'Draft': 1,
-    'ACH': 1 + 1*params.sigma,
-    'Fee': -1 - 1*params.sigma,
-    'Credit/Debit Card': 1 + 2*params.sigma,
-    'Home Banking': 1 + 2*params.sigma,
-    'Dividend': 1 + 3*params.sigma,
-    'Total_Transactions': 1,
+    'ATM': 1, # Standard transactions
+    'Bill Payment': 1 + 1.5*params.sigma, # Slightly more important due to its link to loans
+    'Cash': 1, # Standard transactions
+    'Draft': 1, # Standard transactions
+    'ACH': 1 + 2*params.sigma, # Primary banking indicator, more important
+    'Fee': -1 - 1*params.sigma, # Negative impact
+    'Credit/Debit Card': 1 + 1*params.sigma, # Standard transactions
+    'Home Banking': 1 + 1*params.sigma, # Indicates engagement but not directly profitability
+    'Dividend': 1 + 3*params.sigma, # High importance for profitability
+    'Total_Transactions': 1, # Overall activity indicator
 }
 
 weighted_branch = scaled_grouped_branch.copy()
@@ -274,26 +274,26 @@ scaled_grouped_members.describe()
 # Fee
 
 member_weights = {
-    'n_checking_accts': 1 + 1*params.sigma,
-    'n_savings_accts': 1 + 1*params.sigma,
-    'n_open_loans': 1 + 2*params.sigma,
-    'n_open_cds': 1 + 3*params.sigma,
-    'n_open_club_accts': 1,
-    'n_open_credit_cards': 1 + 2*params.sigma,
-    'ATMCount': 1,
-    'BillPaymentCount': 1 + 1*params.sigma,
-    'CashCount': 1,
-    'DraftCount': 1,
-    'ACHCount': 1 + 1*params.sigma,
-    'FeeCount': -1 - 1*params.sigma,
-    'Credit_DebitCount': 1 + 2*params.sigma,
-    'Home_Banking': 1 + 2*params.sigma,
-    'WireCount': 1 + 1*params.sigma,
-    'DividendCount': 1 + 3*params.sigma,
-    'Total_Transactions': 1,
-    'Branch_Score': 1 + 4*params.sigma,
-    'County_Mismatch': params.mismatch_weight,  # Binary Variable, so weight is a bit tricky
-    'Virtual_Branch': params.virtual_weight,   # Binary Variable, so weight is a bit tricky
+    'n_checking_accts': 1 + 1*params.sigma, # Standard account type
+    'n_savings_accts': 1 + 2*params.sigma, # Indicator of stored funds
+    'n_open_loans': 1 + 1.5*params.sigma, # Important for indebted customer base
+    'n_open_cds': 1 + 3*params.sigma, # High-value accounts, significant for profitability
+    'n_open_club_accts': 1, # Standard account type
+    'n_open_credit_cards': 1 + 1*params.sigma, # Indicative of spending but not direct profitability
+    'ATMCount': 1, # Standard transaction type
+    'BillPaymentCount': 1 + 2*params.sigma, # Linked to loans, hence more important
+    'CashCount': 1, # Standard transaction type
+    'DraftCount': 1, # Standard transaction type
+    'ACHCount': 1 + 3*params.sigma, # Primary banking indicator, more important
+    'FeeCount': -1 - 1*params.sigma, # Negative impact
+    'Credit_DebitCount': 1 + 1*params.sigma, # Standard transaction type
+    'Home_Banking': 1 + 1*params.sigma, # Indicates engagement but not directly profitability
+    'WireCount': 1 + 1.5*params.sigma, # Slightly more important due to larger transactions
+    'DividendCount': 1 + 3*params.sigma, # High importance for profitability
+    'Total_Transactions': 1, # Overall activity indicator
+    'Branch_Score': 1 + 4*params.sigma, # Overall branch performance, highly important
+    'County_Mismatch': params.mismatch_weight, # Binary Variable, so weight is a bit tricky
+    'Virtual_Branch': params.virtual_weight, # Binary Variable, so weight is a bit tricky
 }
 
 weighted_members = scaled_grouped_members.copy()
