@@ -7,6 +7,9 @@ Original file is located at
     https://colab.research.google.com/drive/1DWZU-s7CrBkN8qNDiACDCOBBzDDyoiqH
 """
 
+# to run in google colab, first uncomment and run these lines
+# then restart runtime and run the rest
+
 # !pip install uszipcode
 # !pip install python-Levenshtein
 
@@ -27,9 +30,20 @@ import seaborn as sns
 from uszipcode import SearchEngine
 from dataclasses import dataclass
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import Lasso
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import TensorDataset
+from torch.utils.data import DataLoader
 
 from google.colab import drive
 drive.mount('/content/drive')
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 @dataclass
 class Params:
@@ -41,8 +55,85 @@ class Params:
   mismatch_weight = 10
   virtual_weight = 10
   test_size = 0.2
+  num_layers = 2
+  hidden_dim = 64
+  dropout = 0.05
+  batch_size = 32
+  lr = 0.001
+  random_state = 25
 
 params = Params()
+
+class FeedForward(nn.Module):
+    def __init__(self, input_dim, hidden_size, dropout_rate, num_layers=2):
+        super(FeedForward, self).__init__()
+
+        self.layers = nn.ModuleList([nn.Linear(input_dim, hidden_size)])
+
+        for _ in range(1, num_layers):
+            self.layers.append(nn.Linear(hidden_size, hidden_size))
+            self.layers.append(nn.Dropout(dropout_rate))
+
+        self.output = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        for layer in self.layers:
+            if isinstance(layer, nn.Dropout):
+                x = layer(x)
+            else:
+                x = F.relu(layer(x))
+        return self.output(x)
+
+class Trainer:
+    def __init__(self, model, train_loader, test_loader, criterion, optimizer, device):
+        self.model = model.to(device)
+        self.train_loader = train_loader
+        self.test_loader = test_loader
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.device = device
+
+    def train(self, epochs, print_interval=10):
+        train_loss_list = []
+        test_loss_list = []
+
+        for epoch in range(epochs):
+            self.model.train()
+            train_loss = 0.0
+
+            for batch in self.train_loader:
+                inputs, targets = batch
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
+                self.optimizer.zero_grad()
+                outputs = self.model(inputs).squeeze()
+                loss = self.criterion(outputs, targets)
+                loss.backward()
+                self.optimizer.step()
+                train_loss += loss.item()
+
+            # Calculate average losses
+            avg_train_loss = train_loss / len(self.train_loader)
+            train_loss_list.append(avg_train_loss)
+
+            avg_test_loss = self.evaluate(self.test_loader)
+            test_loss_list.append(avg_test_loss)
+
+            # Print losses
+            if (epoch % print_interval == 0):
+                print(f"Epoch [{epoch+1}/{epochs}] - Train Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}")
+
+        return train_loss_list, test_loss_list
+
+    def evaluate(self, test_loader):
+        self.model.eval()
+        test_loss = 0.0
+        with torch.no_grad():
+            for batch in test_loader:
+                inputs, targets = batch
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
+                outputs = self.model(inputs).squeeze()
+                test_loss += self.criterion(outputs, targets).item()
+        return test_loss / len(test_loader)
 
 path_to_folder = '/content/drive/My Drive/Big Data Folder/'
 
@@ -308,6 +399,8 @@ weighted_members['Target_Score'] = weighted_members[columns_for_scoring_members]
 
 weighted_members[['Unique_Member_Identifier', 'age', 'address_zip', 'Branch_County', 'Target_Score']].sort_values(by='Target_Score', ascending=False)
 
+"""## Making Final Dataset"""
+
 final_df = weighted_members[['age', 'address_zip', 'BranchCategory', 'Branch_County', 'address_county', 'Target_Score']].copy()
 
 final_df['Population'] = final_df['address_zip'].map(zip_to_pop_map)
@@ -330,22 +423,28 @@ final_df.isna().sum()
 
 len(final_df)
 
-# Unique Zip Codes dataset, probably won't be used
-zip_df = pd.DataFrame(good_zips, columns=['ZipCode'])
+"""## Secondary approach
 
-zip_df['County'] = zip_df['ZipCode'].map(zip_to_county_map)
-zip_df['Population'] = zip_df['ZipCode'].map(zip_to_pop_map)
-zip_df['PopulationDensity'] = zip_df['ZipCode'].map(zip_to_popdens_map)
-zip_df['RadiusInMiles'] = zip_df['ZipCode'].map(zip_to_rad_map)
-zip_df['HousingUnits'] = zip_df['ZipCode'].map(zip_to_hunits_map)
-zip_df['MedianHomeValue'] = zip_df['ZipCode'].map(zip_to_homeval_map)
-zip_df['MedianHouseholdIncome'] = zip_df['ZipCode'].map(zip_to_inc_map)
+### Making a dataframe grouped by unique zip code
+"""
 
-zip_df['County'] = zip_df['County'].str.replace(' County', '', regex=False)
+zip_df = final_df.groupby('address_zip').agg({
+    'age': 'mean',
+    'Target_Score': 'mean',
+    'Population': 'last',
+    'PopulationDensity': 'last',
+    'RadiusInMiles': 'last',
+    'HousingUnits': 'last',
+    'MedianHomeValue': 'last',
+    'MedianHouseholdIncome': 'last',
+}).reset_index()
 
 zip_df.head()
 
-"""## Making the dataset we want to predict score for at the end
+# Note that this significantly cuts down the number of data points we have
+len(zip_df)
+
+"""## Making the dataset with potetial locations
 
 ### All the zip codes in the possible new branch locations
 """
@@ -376,8 +475,6 @@ sumter = [32162,32163,33513,33514,33521,33538,33585,33597,34484,34785]
 volusia = [32105,32114,32115,32116,32117,32118,32119,32120,32121,32122,32123,32124,32125,32126,32127,32128,32129,32130,32132,32141,32168,32169,32170,32173,32174,32175,32176,32180,32190,32198,32706,32713,32720,32721,32722,32723,32724,32725,32728,32738,32739,32744,32753,32759,32763,32764,32774]
 
 all_pred_zips = orange + osceola + seminole + lake + alachua + brevard + duval + flagler + hernando + highlands + hillsborough + indian + manatee + marion + martin + okeechobee + pasco + pinellas + polk + sarasota + stJohns + stLucie + sumter + volusia
-
-
 
 zip_to_pop_map_pred = {}
 zip_to_popdens_map_pred = {}
@@ -427,5 +524,182 @@ pred_df.isna().sum()
 
 # We do not have enough data on 311 zip codes, so we have to drop them
 pred_df.dropna(inplace=True)
-len(pred_df)
+print(f'we now have {len(pred_df)} zip codes to choose a new location from.')
+
+"""## Train/Test Split"""
+
+# At this point most of our dependent variables in final_df, except age, were determined based on
+# a member's zipcode, so many data points will have identical variables (maybe except age)
+# if they live in the same zip code. This could mean that many of our testing data will be
+# similar to training data if we do the general splitting of train and test.
+
+# To ensure a robust evaluation of the model's generalizability, we avoid a regular train-test split.
+# Instead, we split the dataset based on unique zip codes, ensuring no zip code is represented
+# in both the training and test sets, thus providing a more realistic assessment of the model on unseen data
+
+np.random.seed(params.random_state)
+
+final_unique_zips = final_df['address_zip'].unique()
+
+# Randomly select a percentage (params.test_size) of these zip codes
+test_zips = np.random.choice(final_unique_zips, size=int(len(final_unique_zips) * params.test_size), replace=False)
+
+is_test = final_df['address_zip'].isin(test_zips)
+
+train_df = final_df[~is_test]
+test_df = final_df[is_test]
+
+# Note that this doesn't exactly give us params.test_size for the test_df,
+# the proportion could be a bit off, but still should be within the same number
+
+print(f'test data is now {len(test_df)/len(train_df)*100:.3f}% of the data.')
+
+X_train = train_df[['Population', 'PopulationDensity', 'RadiusInMiles', 'HousingUnits',
+                    'MedianHomeValue', 'MedianHouseholdIncome', 'age']]
+y_train = train_df['Target_Score']
+
+X_test = test_df[['Population', 'PopulationDensity', 'RadiusInMiles', 'HousingUnits',
+                  'MedianHomeValue', 'MedianHouseholdIncome', 'age']]
+y_test = test_df['Target_Score']
+
+"""## Models
+
+### Random Forrest
+"""
+
+rf_regressor = RandomForestRegressor(n_estimators=200, random_state=params.random_state)
+
+rf_regressor.fit(X_train, y_train)
+
+y_pred_rf = rf_regressor.predict(X_test)
+
+mse_rf = mean_squared_error(y_test, y_pred_rf)
+r2_rf = r2_score(y_test, y_pred_rf)
+
+print(f"Mean Squared Error: {mse_rf}")
+print(f"R-squared: {r2_rf}")
+
+importances = rf_regressor.feature_importances_
+
+for i, feature in enumerate(X_train.columns):
+    print(f"{feature}: {importances[i]}")
+
+"""### Lasso"""
+
+lasso = Lasso(alpha=0.1)
+
+lasso.fit(X_train, y_train)
+
+y_pred_lasso = lasso.predict(X_test)
+
+mse_lasso = mean_squared_error(y_test, y_pred_lasso)
+r2_lasso = r2_score(y_test, y_pred_lasso)
+print(f"Lasso Regression Mean Squared Error: {mse_lasso}")
+print(f"R-squared: {r2_lasso}")
+
+"""## Feed-Forward Neural Network"""
+
+X_train_tensor = torch.tensor(X_train.values, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train.values, dtype=torch.float32)
+
+X_test_tensor = torch.tensor(X_test.values, dtype=torch.float32)
+y_test_tensor = torch.tensor(y_test.values, dtype=torch.float32)
+
+train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
+
+train_loader = DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=params.batch_size)
+
+input_dim = X_train.shape[1]
+
+ff_model = FeedForward(input_dim=input_dim, hidden_size=params.hidden_dim, dropout_rate=params.dropout, num_layers=params.num_layers)
+
+criterion = nn.MSELoss()
+
+optimizer = torch.optim.Adam(ff_model.parameters(), lr=params.lr)
+
+trainer = Trainer(model=ff_model,
+                  train_loader=train_loader,
+                  test_loader=test_loader,
+                  criterion=criterion,
+                  optimizer=optimizer,
+                  device=device)
+
+epochs = 300
+
+train_loss, test_loss = trainer.train(epochs=epochs)
+
+"""# Second Approach
+
+## Trying with zip code dataset
+"""
+
+X = zip_df.drop(['address_zip', 'Target_Score'], axis=1)
+y = zip_df['Target_Score']
+
+X_train2, X_test2, y_train2, y_test2 = train_test_split(X, y, test_size=params.lr, random_state=params.random_state)
+
+"""### Random Forrest"""
+
+rf_regressor2 = RandomForestRegressor(n_estimators=200, random_state=params.random_state)
+
+rf_regressor2.fit(X_train2, y_train2)
+
+y_pred_rf2 = rf_regressor2.predict(X_test2)
+
+mse_rf2 = mean_squared_error(y_test2, y_pred_rf2)
+r2_rf2 = r2_score(y_test2, y_pred_rf2)
+
+print(f"Mean Squared Error: {mse_rf2}")
+print(f"R-squared: {r2_rf2}")
+
+importances2 = rf_regressor2.feature_importances_
+
+for i, feature in enumerate(X_train2.columns):
+    print(f"{feature}: {importances2[i]}")
+
+"""### Lasso"""
+
+lasso2 = Lasso(alpha=0.1)
+
+lasso2.fit(X_train2, y_train2)
+
+y_pred_lasso2 = lasso2.predict(X_test2)
+
+mse_lasso2 = mean_squared_error(y_test2, y_pred_lasso2)
+r2_lasso2 = r2_score(y_test2, y_pred_lasso2)
+print(f"Lasso Regression Mean Squared Error: {mse_lasso2}")
+print(f"R-squared: {r2_lasso2}")
+
+"""### Feed Forward Neural Network"""
+
+X_train_tensor2 = torch.tensor(X_train2.values, dtype=torch.float32)
+y_train_tensor2 = torch.tensor(y_train2.values, dtype=torch.float32)
+
+X_test_tensor2 = torch.tensor(X_test2.values, dtype=torch.float32)
+y_test_tensor2 = torch.tensor(y_test2.values, dtype=torch.float32)
+
+train_dataset2 = TensorDataset(X_train_tensor2, y_train_tensor2)
+test_dataset2 = TensorDataset(X_test_tensor2, y_test_tensor2)
+
+train_loader2 = DataLoader(train_dataset2, batch_size=params.batch_size, shuffle=True)
+test_loader2 = DataLoader(test_dataset2, batch_size=params.batch_size)
+
+input_dim2 = X_train2.shape[1]
+
+ff_model2 = FeedForward(input_dim=input_dim2, hidden_size=params.hidden_dim, dropout_rate=params.dropout, num_layers=4)
+
+optimizer2 = torch.optim.Adam(ff_model2.parameters(), lr=params.lr)
+
+trainer2 = Trainer(model=ff_model2,
+                  train_loader=train_loader2,
+                  test_loader=test_loader2,
+                  criterion=criterion,
+                  optimizer=optimizer2,
+                  device=device)
+
+epochs = 1000
+
+train_loss2, test_loss2 = trainer2.train(epochs=epochs)
 

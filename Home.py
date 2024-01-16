@@ -19,20 +19,27 @@ import numpy as np
 from uszipcode import SearchEngine
 import plotly.express as px
 from dataclasses import dataclass
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 
 LOGGER = get_logger(__name__)
 
 @dataclass
 
 class Params:
-    '''All paramaters used throughout the code'''
-
-    sigma = 0.2 # determines how significant the weight a variables is
+    '''
+    All parameters used throughout the code
+    '''
+    sigma = 0.2 # determines how significant the weight a variable is
     scale_range = (0, 20)
     mismatch_weight = 10
     virtual_weight = 10
     test_size = 0.2
+    num_layers = 2
+    hidden_dim = 64
+    dropout = 0.05
+    batch_size = 32
+    lr = 0.001
+    random_state = 25
 
 params = Params()
 
@@ -87,6 +94,9 @@ def process_data(branch_df, member_df):
     branch_df['County'] = branch_df['BranchCategory'].map(county_map)
     member_df['Branch_County'] = member_df['BranchCategory'].map(county_map)
 
+    # set EOM_TRANS_DATE to datetime
+    member_df["EOM_TRANS_DATE"] = member_df["EOM_TRANS_DATE"].astype("datetime64")
+
     unique_zips = member_df['address_zip'].unique()
 
     search = SearchEngine()
@@ -108,6 +118,7 @@ def process_data(branch_df, member_df):
 
     # Define the aggregation dictionary
     agg_dict = {col: 'sum' for col in transaction_columns}
+    # average was selected for these columns because when insights are being made, the total amount of accounts a member has is not as important as the average amount of accounts a member has for EOM analysis and Branch performance
     agg_dict.update({col: 'mean' for col in avg_columns})
 
     grouped_members_eom = member_df.groupby(['BranchCategory', 'EOM_TRANS_DATE']).agg(agg_dict).reset_index()
@@ -131,14 +142,56 @@ def group_branch_data(df):
     }).rename(columns={'EOM_TRANS_DATE': 'Total_Transactions'}).reset_index()
     return grouped_df
 
-def scale_branch_data(df):
-    scaler = MinMaxScaler(feature_range=params.scale_range)
-    columns_to_normalize = ['ATM', 'Bill Payment', 'Cash', 'Draft', 'ACH', 'Fee', 'Credit/Debit Card', 'Home Banking', 'Dividend']
+def merge_dataframes(df1, df2):
+    merged_df = pd.merge(df1, df2, on=['EOM_TRANS_DATE', 'BranchCategory'])
+    return merged_df
 
-    scaled_grouped_branch = df.copy()
-    scaled_grouped_branch[columns_to_normalize] = scaler.fit_transform(df[columns_to_normalize])
+#Weighting and Scaling Merged Data
+def weigh_scale_data(df):
+    scaler = StandardScaler()
+    columns_to_scale = ['ATM', 'Bill Payment', 'Cash', 'Draft', 'ACH', 'Fee', 'Credit/Debit Card', 'Home Banking', 'Dividend', 'ATMCount', 'BillPaymentCount', 'CashCount', 'DraftCount', 'ACHCount', 'FeeCount', 'Credit_DebitCount', 'Home_Banking', 'WireCount', 'DividendCount', 'n_accts', 'n_checking_accts', 'n_savings_accts', 'n_open_loans', 'n_open_cds', 'n_open_club_accts', 'n_open_credit_cards']
+    scaled_df = df.copy()
+    scaled_df[columns_to_scale] = scaler.fit_transform(df[columns_to_scale])
 
-    return scaled_grouped_branch
+    branch_weights = {
+        'ATM': 1, # Standard transactions
+        'Bill Payment': 1 + 1.5*params.sigma, # Slightly more important due to its link to loans
+        'Cash': 1, # Standard transactions
+        'Draft': 1, # Standard transactions
+        'ACH': 1 + 2*params.sigma, # Primary banking indicator, more important
+        'Fee': -1 - 1*params.sigma, # Negative impact
+        'Credit/Debit Card': 1 + 1*params.sigma, # Standard transactions
+        'Home Banking': 1 + 1*params.sigma, # Indicates engagement but not directly profitability
+        'Dividend': 1 + 3*params.sigma, # High importance for profitability
+        'n_checking_accts': 1 + 1*params.sigma, # Standard account type
+        'n_savings_accts': 1 + 2*params.sigma, # Indicator of stored funds
+        'n_open_loans': 1 + 1.5*params.sigma, # Important for indebted customer base
+        'n_open_cds': 1 + 3*params.sigma, # High-value accounts, significant for profitability
+        'n_open_club_accts': 1, # Standard account type
+        'n_open_credit_cards': 1 + 1*params.sigma, # Indicative of spending but not direct profitability
+        'ATMCount': 1, # Standard transaction type
+        'BillPaymentCount': 1 + 2*params.sigma, # Linked to loans, hence more important
+        'CashCount': 1, # Standard transaction type
+        'DraftCount': 1, # Standard transaction type
+        'ACHCount': 1 + 3*params.sigma, # Primary banking indicator, more important
+        'FeeCount': -1 - 1*params.sigma, # Negative impact
+        'Credit_DebitCount': 1 + 1*params.sigma, # Standard transaction type
+        'Home_Banking': 1 + 1*params.sigma, # Indicates engagement but not directly profitability
+        'WireCount': 1 + 1.5*params.sigma, # Slightly more important due to larger transactions
+        'DividendCount': 1 + 3*params.sigma, # High importance for profitability
+        }
+
+    weighted_df = scaled_df.copy()
+    columns_for_scoring = columns_to_scale
+    
+    for column, weight in branch_weights.items():
+        weighted_df[column] *= weight
+
+    weighted_df['Branch_Score'] = weighted_df[columns_for_scoring].sum(axis=1)
+
+    weighted_df[['BranchCategory', 'Branch_Score']].sort_values(by='Branch_Score', ascending=False).reset_index()
+
+    return weighted_df
 
 def create_corr_matrix_heatmap(df):
     corr_matrix = df.corr()
@@ -203,6 +256,10 @@ def run():
             st.dataframe(grouped_branches)
             st.dataframe(grouped_branches.describe())
 
+    # Member DataFrame All Possible Branches
+    # st.text("Member DataFrame All Possible Branches")
+    # st.dataframe(member_df['BranchCategory'].unique())
+    
     st.markdown(f"""
                 #### Post Import Size
 
@@ -262,20 +319,78 @@ def run():
         
     st.markdown("### Exploratory Analysis")
 
-    st.markdown("#### Grouped Data")
-    st.dataframe(group_members.describe())
-    fig = create_corr_matrix_heatmap(group_members)
-    st.plotly_chart(fig)
+    with st.expander("See Exploratory Analysis"):
+        tab_members, tab_branch = st.tabs(['Member Data', 'Branch Data'])
+        
+        with tab_members:
+            st.markdown("#### Member Data")
+            st.dataframe(member_df.describe())
+            fig = create_corr_matrix_heatmap(member_df)
+            st.plotly_chart(fig)
 
-    st.markdown("#### Grouped (Branch & Month) Data")
-    st.dataframe(group_members_eom.describe())
-    fig = create_corr_matrix_heatmap(group_members_eom)
-    st.plotly_chart(fig)
+            st.markdown("#### Grouped Member Data (Branch & Date)")
+            st.dataframe(group_members_eom.describe())
+            fig = create_corr_matrix_heatmap(group_members_eom)
+            st.plotly_chart(fig)
 
-    st.markdown("#### Member Data")
-    st.dataframe(member_df.describe())
-    fig = create_corr_matrix_heatmap(member_df)
-    st.plotly_chart(fig)
+            st.markdown("#### Grouped Member Data")
+            st.dataframe(group_members.describe())
+            fig = create_corr_matrix_heatmap(group_members)
+            st.plotly_chart(fig)
+
+        with tab_branch:
+            st.markdown("#### Branch Data")
+            st.dataframe(branch_df.describe())
+            fig = create_corr_matrix_heatmap(branch_df)
+            st.plotly_chart(fig)
+
+            st.markdown("#### Grouped Branch Data")
+            st.dataframe(grouped_branches.describe())
+            fig = create_corr_matrix_heatmap(grouped_branches)
+            st.plotly_chart(fig)
+
+    st.markdown("### Branch & Member Data Time Series Alignment")
+
+    with st.expander("See Time Series Alignment"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("Branch Data Columns")
+            st.dataframe(branch_df.columns)
+            # print the datatypes of the columns
+            st.write("Branch Data Types")
+            st.dataframe(branch_df.dtypes)
+        
+        with col2:
+            st.write("Member Data Columns")
+            st.dataframe(group_members_eom.columns)
+            # print the datatypes of the columns
+            st.write("Member Data Types")
+            st.dataframe(group_members_eom.dtypes)
+
+    # merging branch and member by EOM_TRANS_DATE BranchCategory
+        merged_df = merge_dataframes(group_members_eom, branch_df)
+        st.dataframe(merged_df)
+    
+    st.markdown(f"""
+                #### Post Merge Analysis
+                
+                ##### Branch Data
+                
+                Branch Data = {branch_df.shape}
+                
+                ##### Grouped Member Data (Branch & Date)
+                
+                Grouped Member Data (Branch & Date) = {group_members_eom.shape}
+                
+                ##### Merged Data
+                
+                Merged Data = {merged_df.shape}
+    """)
+
+    st.markdown("### Weighing Scaling & Merging Data")
+    weighed_df = weigh_scale_data(merged_df)
+    st.dataframe(weighed_df)
+    
 
     with st.expander("Notes"):
         st.text("""
