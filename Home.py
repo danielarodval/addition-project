@@ -391,7 +391,6 @@ def run():
     weighed_df = weigh_scale_data(merged_df)
     st.dataframe(weighed_df)
     
-
     with st.expander("Notes"):
         st.text("""
                 correlation (matrix or pairplot)    
